@@ -2,6 +2,8 @@ export interface AppConfig {
   baseUrl: string;
   apiKey: string | undefined;
   timeoutMs: number;
+  /** Workspace LightRAG por defeito (cabeçalho `LIGHTRAG-WORKSPACE`); sobrescrito pelo argumento `workspace` da tool. */
+  defaultWorkspace: string | undefined;
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -40,5 +42,7 @@ export function loadConfigFromEnv(
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1) {
     throw new Error("LIGHTRAG_TIMEOUT_MS must be a positive number");
   }
-  return { baseUrl, apiKey, timeoutMs };
+  const ws = env.LIGHTRAG_WORKSPACE?.trim();
+  const defaultWorkspace = ws && ws.length > 0 ? ws : undefined;
+  return { baseUrl, apiKey, timeoutMs, defaultWorkspace };
 }

@@ -12,9 +12,34 @@ import { readPackageJsonVersion } from "./version.js";
 
 const queryModeEnum = z.enum(["naive", "local", "global", "hybrid", "mix"]);
 
+/** Campo opcional comum a todas as tools (override do workspace por chamada). */
+function withWorkspace(
+  inner: z.ZodObject<z.ZodRawShape>,
+): z.ZodObject<z.ZodRawShape> {
+  return inner.extend({ workspace: z.string().optional() });
+}
+
+function workspaceFromTool(p: { workspace?: unknown }): string | undefined {
+  const w = p.workspace;
+  if (typeof w !== "string") {
+    return undefined;
+  }
+  const t = w.trim();
+  return t.length > 0 ? t : undefined;
+}
+
+function omitWorkspace<T extends { workspace?: unknown }>(
+  p: T,
+): Omit<T, "workspace"> {
+  const { workspace, ...rest } = p;
+  void workspace;
+  return rest;
+}
+
 function resolveClientOptions(
   deps?: Partial<LightragClientOptions>,
 ): LightragClientOptions {
+  const fromEnv = loadConfigFromEnv();
   if (deps?.baseUrl) {
     return {
       baseUrl: deps.baseUrl,
@@ -22,15 +47,16 @@ function resolveClientOptions(
       fetchFn: deps.fetchFn,
       timeoutMs: deps.timeoutMs,
       cwd: deps.cwd,
+      defaultWorkspace: deps.defaultWorkspace ?? fromEnv.defaultWorkspace,
     };
   }
-  const c = loadConfigFromEnv();
   return {
-    baseUrl: c.baseUrl,
-    apiKey: c.apiKey,
+    baseUrl: fromEnv.baseUrl,
+    apiKey: fromEnv.apiKey,
     fetchFn: deps?.fetchFn,
-    timeoutMs: deps?.timeoutMs ?? c.timeoutMs,
+    timeoutMs: deps?.timeoutMs ?? fromEnv.timeoutMs,
     cwd: deps?.cwd,
+    defaultWorkspace: deps?.defaultWorkspace ?? fromEnv.defaultWorkspace,
   };
 }
 
@@ -97,20 +123,21 @@ export function createMcpServer(
     });
   };
 
-  const emptySchema = z.object({});
+  const workspaceOnlySchema = z.object({ workspace: z.string().optional() });
 
   // —— Documents (10) ——
   registerZod(
     "insert_text",
     "Insert a single text document into LightRAG",
-    z.object({
-      text: z.string(),
-      file_source: z.string().default("text_input.txt"),
-    }),
+    withWorkspace(
+      z.object({
+        text: z.string(),
+        file_source: z.string().default("text_input.txt"),
+      }),
+    ),
     (p) =>
-      client.postJson("/documents/text", {
-        text: p.text,
-        file_source: p.file_source,
+      client.postJson("/documents/text", omitWorkspace(p), {
+        workspace: workspaceFromTool(p),
       }),
   );
 
@@ -121,259 +148,389 @@ export function createMcpServer(
       .object({
         texts: z.array(z.string()),
         file_sources: z.array(z.string()).optional(),
+        workspace: z.string().optional(),
       })
       .transform((data) => ({
         texts: data.texts,
         file_sources:
           data.file_sources ??
           data.texts.map((_, i) => `text_input_${String(i + 1)}.txt`),
+        workspace: data.workspace,
       })),
-    (p) => client.postJson("/documents/texts", p),
+    (p) =>
+      client.postJson("/documents/texts", omitWorkspace(p), {
+        workspace: workspaceFromTool(p),
+      }),
     {
       texts: z.array(z.string()),
       file_sources: z.array(z.string()).optional(),
+      workspace: z.string().optional(),
     },
   );
 
   registerZod(
     "upload_document",
     "Upload a document: local file path (under cwd) or base64-encoded bytes",
-    z.object({ file: z.string() }),
-    (p) => client.postMultipartUpload(p.file),
+    withWorkspace(z.object({ file: z.string() })),
+    (p) =>
+      client.postMultipartUpload((omitWorkspace(p) as { file: string }).file, {
+        workspace: workspaceFromTool(p),
+      }),
   );
 
   registerZod(
     "scan_documents",
     "Scan for new documents in the configured directory",
-    emptySchema,
-    () => client.postNoBody("/documents/scan"),
+    workspaceOnlySchema,
+    (p) =>
+      client.postNoBody("/documents/scan", {
+        workspace: workspaceFromTool(p),
+      }),
   );
 
   registerZod(
     "get_documents",
     "Retrieve all documents from LightRAG",
-    emptySchema,
-    () => client.getJson("/documents"),
+    workspaceOnlySchema,
+    (p) => client.getJson("/documents", { workspace: workspaceFromTool(p) }),
   );
 
   registerZod(
     "get_documents_paginated",
     "Retrieve documents with pagination",
-    z.object({
-      page: z.number().default(1),
-      page_size: z.number().default(50),
-    }),
-    (p) => client.postJson("/documents/paginated", p),
+    withWorkspace(
+      z.object({
+        page: z.number().default(1),
+        page_size: z.number().default(50),
+      }),
+    ),
+    (p) =>
+      client.postJson("/documents/paginated", omitWorkspace(p), {
+        workspace: workspaceFromTool(p),
+      }),
   );
 
   registerZod(
     "delete_document",
     "Delete specific documents by IDs",
-    z.object({ doc_ids: z.array(z.string()) }),
-    (p) => client.deleteJson("/documents/delete_document", p),
+    withWorkspace(z.object({ doc_ids: z.array(z.string()) })),
+    (p) =>
+      client.deleteJson("/documents/delete_document", omitWorkspace(p), {
+        workspace: workspaceFromTool(p),
+      }),
   );
 
   registerZod(
     "clear_documents",
     "Clear all documents from LightRAG",
-    emptySchema,
-    () => client.deleteJson("/documents"),
+    workspaceOnlySchema,
+    (p) =>
+      client.deleteJson("/documents", undefined, {
+        workspace: workspaceFromTool(p),
+      }),
   );
 
   registerZod(
     "reprocess_failed_documents",
     "Reprocess failed and pending documents",
-    emptySchema,
-    () => client.postJson("/documents/reprocess_failed", {}),
+    workspaceOnlySchema,
+    (p) =>
+      client.postJson(
+        "/documents/reprocess_failed",
+        {},
+        {
+          workspace: workspaceFromTool(p),
+        },
+      ),
   );
 
   registerZod(
     "cancel_pipeline",
     "Cancel the currently running pipeline",
-    emptySchema,
-    () => client.postJson("/documents/cancel_pipeline", {}),
+    workspaceOnlySchema,
+    (p) =>
+      client.postJson(
+        "/documents/cancel_pipeline",
+        {},
+        {
+          workspace: workspaceFromTool(p),
+        },
+      ),
   );
 
   // —— Query (3) ——
   registerZod(
     "query_text",
     "Query LightRAG with text using various retrieval modes",
-    z.object({
-      query: z.string(),
-      mode: queryModeEnum.default("hybrid"),
-      only_need_context: z.boolean().default(false),
-      top_k: z.number().default(60),
-    }),
-    (p) => client.postJson("/query", p),
+    withWorkspace(
+      z.object({
+        query: z.string(),
+        mode: queryModeEnum.default("hybrid"),
+        only_need_context: z.boolean().default(false),
+        top_k: z.number().default(60),
+      }),
+    ),
+    (p) =>
+      client.postJson("/query", omitWorkspace(p), {
+        workspace: workspaceFromTool(p),
+      }),
   );
 
   registerZod(
     "query_text_stream",
     "Stream query results from LightRAG (NDJSON aggregated)",
-    z.object({
-      query: z.string(),
-      mode: queryModeEnum.default("hybrid"),
-    }),
-    (p) =>
-      client.postQueryStream({
-        query: p.query,
-        mode: p.mode,
-        stream: true,
+    withWorkspace(
+      z.object({
+        query: z.string(),
+        mode: queryModeEnum.default("hybrid"),
       }),
+    ),
+    (p) => {
+      const b = omitWorkspace(p) as { query: string; mode: string };
+      return client.postQueryStream(
+        { query: b.query, mode: b.mode, stream: true },
+        { workspace: workspaceFromTool(p) },
+      );
+    },
   );
 
   registerZod(
     "query_data",
     "Get raw retrieval data without full LLM answer",
-    z.object({
-      query: z.string(),
-      mode: queryModeEnum.default("hybrid"),
-    }),
-    (p) => client.postJson("/query/data", p),
+    withWorkspace(
+      z.object({
+        query: z.string(),
+        mode: queryModeEnum.default("hybrid"),
+      }),
+    ),
+    (p) =>
+      client.postJson("/query/data", omitWorkspace(p), {
+        workspace: workspaceFromTool(p),
+      }),
   );
 
   // —— Graph (12) ——
   registerZod(
     "get_knowledge_graph",
     "Retrieve knowledge graph for a specific label or all entities",
-    z.object({
-      label: z.string().default("*"),
-      max_depth: z.number().default(3),
-      max_nodes: z.number().default(1000),
-    }),
-    (p) => client.getJsonWithParams("/graphs", p),
+    withWorkspace(
+      z.object({
+        label: z.string().default("*"),
+        max_depth: z.number().default(3),
+        max_nodes: z.number().default(1000),
+      }),
+    ),
+    (p) =>
+      client.getJsonWithParams("/graphs", omitWorkspace(p), {
+        workspace: workspaceFromTool(p),
+      }),
   );
 
-  registerZod("get_graph_labels", "Get all graph labels", emptySchema, () =>
-    client.getJson("/graph/label/list"),
+  registerZod(
+    "get_graph_labels",
+    "Get all graph labels",
+    workspaceOnlySchema,
+    (p) =>
+      client.getJson("/graph/label/list", {
+        workspace: workspaceFromTool(p),
+      }),
   );
 
   registerZod(
     "get_popular_labels",
     "Get popular labels by node degree",
-    z.object({ limit: z.number().default(300) }),
-    (p) => client.getJsonWithParams("/graph/label/popular", p),
+    withWorkspace(z.object({ limit: z.number().default(300) })),
+    (p) =>
+      client.getJsonWithParams("/graph/label/popular", omitWorkspace(p), {
+        workspace: workspaceFromTool(p),
+      }),
   );
 
   registerZod(
     "search_labels",
     "Search labels with fuzzy matching",
-    z.object({
-      q: z.string(),
-      limit: z.number().default(50),
-    }),
-    (p) => client.getJsonWithParams("/graph/label/search", p),
+    withWorkspace(
+      z.object({
+        q: z.string(),
+        limit: z.number().default(50),
+      }),
+    ),
+    (p) =>
+      client.getJsonWithParams("/graph/label/search", omitWorkspace(p), {
+        workspace: workspaceFromTool(p),
+      }),
   );
 
   registerZod(
     "check_entity_exists",
     "Check if an entity exists in the knowledge graph",
-    z.object({ name: z.string() }),
-    (p) => client.getJsonWithParams("/graph/entity/exists", { name: p.name }),
+    withWorkspace(z.object({ name: z.string() })),
+    (p) => {
+      const b = omitWorkspace(p) as { name: string };
+      return client.getJsonWithParams(
+        "/graph/entity/exists",
+        { name: b.name },
+        { workspace: workspaceFromTool(p) },
+      );
+    },
   );
 
   registerZod(
     "create_entity",
     "Create a new entity in the knowledge graph",
-    z.object({
-      entity_name: z.string(),
-      entity_data: z.record(z.string(), z.unknown()),
-    }),
-    (p) => client.postJson("/graph/entity/create", p),
+    withWorkspace(
+      z.object({
+        entity_name: z.string(),
+        entity_data: z.record(z.string(), z.unknown()),
+      }),
+    ),
+    (p) =>
+      client.postJson("/graph/entity/create", omitWorkspace(p), {
+        workspace: workspaceFromTool(p),
+      }),
   );
 
   registerZod(
     "update_entity",
     "Update an entity in the knowledge graph",
-    z.object({
-      entity_name: z.string(),
-      updated_data: z.record(z.string(), z.unknown()),
-      allow_rename: z.boolean().default(false),
-      allow_merge: z.boolean().default(false),
-    }),
-    (p) => client.postJson("/graph/entity/edit", p),
+    withWorkspace(
+      z.object({
+        entity_name: z.string(),
+        updated_data: z.record(z.string(), z.unknown()),
+        allow_rename: z.boolean().default(false),
+        allow_merge: z.boolean().default(false),
+      }),
+    ),
+    (p) =>
+      client.postJson("/graph/entity/edit", omitWorkspace(p), {
+        workspace: workspaceFromTool(p),
+      }),
   );
 
   registerZod(
     "delete_entity",
     "Delete an entity from the knowledge graph",
-    z.object({ entity_name: z.string() }),
-    (p) => client.deleteJson("/documents/delete_entity", p),
+    withWorkspace(z.object({ entity_name: z.string() })),
+    (p) =>
+      client.deleteJson("/documents/delete_entity", omitWorkspace(p), {
+        workspace: workspaceFromTool(p),
+      }),
   );
 
   registerZod(
     "create_relation",
     "Create a new relationship between entities",
-    z.object({
-      source_entity: z.string(),
-      target_entity: z.string(),
-      relation_data: z.record(z.string(), z.unknown()),
-    }),
-    (p) => client.postJson("/graph/relation/create", p),
+    withWorkspace(
+      z.object({
+        source_entity: z.string(),
+        target_entity: z.string(),
+        relation_data: z.record(z.string(), z.unknown()),
+      }),
+    ),
+    (p) =>
+      client.postJson("/graph/relation/create", omitWorkspace(p), {
+        workspace: workspaceFromTool(p),
+      }),
   );
 
   registerZod(
     "update_relation",
     "Update a relationship in the knowledge graph",
-    z.object({
-      source_id: z.string(),
-      target_id: z.string(),
-      updated_data: z.record(z.string(), z.unknown()),
-    }),
-    (p) => client.postJson("/graph/relation/edit", p),
+    withWorkspace(
+      z.object({
+        source_id: z.string(),
+        target_id: z.string(),
+        updated_data: z.record(z.string(), z.unknown()),
+      }),
+    ),
+    (p) =>
+      client.postJson("/graph/relation/edit", omitWorkspace(p), {
+        workspace: workspaceFromTool(p),
+      }),
   );
 
   registerZod(
     "delete_relation",
     "Delete a relationship from the knowledge graph",
-    z.object({
-      source_entity: z.string(),
-      target_entity: z.string(),
-    }),
-    (p) => client.deleteJson("/documents/delete_relation", p),
+    withWorkspace(
+      z.object({
+        source_entity: z.string(),
+        target_entity: z.string(),
+      }),
+    ),
+    (p) =>
+      client.deleteJson("/documents/delete_relation", omitWorkspace(p), {
+        workspace: workspaceFromTool(p),
+      }),
   );
 
   registerZod(
     "merge_entities",
     "Merge multiple entities into a single entity",
-    z.object({
-      entities_to_change: z.array(z.string()),
-      entity_to_change_into: z.string(),
-    }),
-    (p) => client.postJson("/graph/entities/merge", p),
+    withWorkspace(
+      z.object({
+        entities_to_change: z.array(z.string()),
+        entity_to_change_into: z.string(),
+      }),
+    ),
+    (p) =>
+      client.postJson("/graph/entities/merge", omitWorkspace(p), {
+        workspace: workspaceFromTool(p),
+      }),
   );
 
   // —— System (5) ——
   registerZod(
     "get_pipeline_status",
     "Get the processing pipeline status",
-    emptySchema,
-    () => client.getJson("/documents/pipeline_status"),
+    workspaceOnlySchema,
+    (p) =>
+      client.getJson("/documents/pipeline_status", {
+        workspace: workspaceFromTool(p),
+      }),
   );
 
   registerZod(
     "get_track_status",
     "Get track status by ID",
-    z.object({ track_id: z.string() }),
-    (p) => client.getJson(`/documents/track_status/${p.track_id}`),
+    withWorkspace(z.object({ track_id: z.string() })),
+    (p) => {
+      const b = omitWorkspace(p) as { track_id: string };
+      return client.getJson(`/documents/track_status/${b.track_id}`, {
+        workspace: workspaceFromTool(p),
+      });
+    },
   );
 
   registerZod(
     "get_document_status_counts",
     "Get document status counts",
-    emptySchema,
-    () => client.getJson("/documents/status_counts"),
+    workspaceOnlySchema,
+    (p) =>
+      client.getJson("/documents/status_counts", {
+        workspace: workspaceFromTool(p),
+      }),
   );
 
-  registerZod("clear_cache", "Clear LightRAG internal cache", emptySchema, () =>
-    client.postJson("/documents/clear_cache", {}),
+  registerZod(
+    "clear_cache",
+    "Clear LightRAG internal cache",
+    workspaceOnlySchema,
+    (p) =>
+      client.postJson(
+        "/documents/clear_cache",
+        {},
+        {
+          workspace: workspaceFromTool(p),
+        },
+      ),
   );
 
   registerZod(
     "get_health",
     "Check LightRAG server health status",
-    emptySchema,
-    () => client.getJson("/health"),
+    workspaceOnlySchema,
+    (p) => client.getJson("/health", { workspace: workspaceFromTool(p) }),
   );
 
   return server;

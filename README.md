@@ -32,11 +32,14 @@ npm install -g pw2c-lightrag-server-mcp
 
 ## Variáveis de ambiente
 
-| Variável              | Obrigatória | Descrição                                                    |
-| --------------------- | ----------- | ------------------------------------------------------------ |
-| `LIGHTRAG_SERVER_URL` | Não         | URL base do LightRAG (predefinição: `http://localhost:9621`) |
-| `LIGHTRAG_API_KEY`    | Não         | Se o servidor exigir, enviada como `X-API-Key`               |
-| `LIGHTRAG_TIMEOUT_MS` | Não         | Timeout HTTP em ms (predefinição: `30000`)                   |
+| Variável              | Obrigatória | Descrição                                                            |
+| --------------------- | ----------- | -------------------------------------------------------------------- |
+| `LIGHTRAG_SERVER_URL` | Não         | URL base do LightRAG (predefinição: `http://localhost:9621`)         |
+| `LIGHTRAG_API_KEY`    | Não         | Se o servidor exigir, enviada como `X-API-Key`                       |
+| `LIGHTRAG_TIMEOUT_MS` | Não         | Timeout HTTP em ms (predefinição: `30000`)                           |
+| `LIGHTRAG_WORKSPACE`  | Não         | Workspace LightRAG por defeito (cabeçalho HTTP `LIGHTRAG-WORKSPACE`) |
+
+**Precedência do workspace:** o argumento opcional `workspace` em cada tool (se não vazio) tem prioridade sobre `LIGHTRAG_WORKSPACE`; se nenhum estiver definido, o cabeçalho não é enviado e aplica-se o comportamento por defeito do servidor LightRAG. O suporte a workspaces pode variar entre versões e rotas; ver [discussão no repositório upstream](https://github.com/HKUDS/LightRAG/issues/2904).
 
 **Upload por path:** o ficheiro tem de estar **dentro do diretório de trabalho** do processo do MCP (sem path traversal para fora). Para conteúdo arbitrário, use **base64** no parâmetro `file` da tool `upload_document`.
 

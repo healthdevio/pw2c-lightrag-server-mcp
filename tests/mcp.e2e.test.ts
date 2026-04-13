@@ -173,6 +173,14 @@ describe("loadConfigFromEnv", () => {
     expect(c.timeoutMs).toBe(5000);
   });
 
+  it("lê LIGHTRAG_WORKSPACE com trim; vazio é indefinido", () => {
+    vi.stubEnv("LIGHTRAG_SERVER_URL", "http://localhost:9621");
+    vi.stubEnv("LIGHTRAG_WORKSPACE", "  prod  ");
+    expect(loadConfigFromEnv().defaultWorkspace).toBe("prod");
+    vi.stubEnv("LIGHTRAG_WORKSPACE", "   ");
+    expect(loadConfigFromEnv().defaultWorkspace).toBeUndefined();
+  });
+
   it("rejeita timeout inválido", () => {
     vi.stubEnv("LIGHTRAG_TIMEOUT_MS", "0");
     expect(() => loadConfigFromEnv()).toThrow();
@@ -328,6 +336,55 @@ describe("MCP e2e com HTTP mock", () => {
 
     const client = await withClientAndServer(baseUrl, process.cwd(), "k-test");
     await client.callTool({ name: "get_health", arguments: {} });
+  });
+
+  it("get_health envia cabeçalho lightrag-workspace quando LIGHTRAG_WORKSPACE está definido", async () => {
+    vi.stubEnv("LIGHTRAG_WORKSPACE", "  ws-env  ");
+    let wsHeader: string | undefined;
+    const { baseUrl, close } = await startMockServer((req, res) => {
+      const h = req.headers["lightrag-workspace"];
+      wsHeader = Array.isArray(h) ? h[0] : h;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ ok: true }));
+    });
+    cleanupTasks.push(close);
+
+    const client = await withClientAndServer(baseUrl, process.cwd());
+    await client.callTool({ name: "get_health", arguments: {} });
+    expect(wsHeader).toBe("ws-env");
+  });
+
+  it("argumento workspace da tool sobrescreve LIGHTRAG_WORKSPACE no mesmo pedido", async () => {
+    vi.stubEnv("LIGHTRAG_WORKSPACE", "from-env");
+    let wsHeader: string | undefined;
+    const { baseUrl, close } = await startMockServer((req, res) => {
+      const h = req.headers["lightrag-workspace"];
+      wsHeader = Array.isArray(h) ? h[0] : h;
+      res.setHeader("Content-Type", "application/json");
+      res.end("{}");
+    });
+    cleanupTasks.push(close);
+
+    const client = await withClientAndServer(baseUrl, process.cwd());
+    await client.callTool({
+      name: "get_health",
+      arguments: { workspace: "from-tool" },
+    });
+    expect(wsHeader).toBe("from-tool");
+  });
+
+  it("get_health sem LIGHTRAG_WORKSPACE nem argumento não envia lightrag-workspace", async () => {
+    let wsHeader: string | string[] | undefined;
+    const { baseUrl, close } = await startMockServer((req, res) => {
+      wsHeader = req.headers["lightrag-workspace"];
+      res.setHeader("Content-Type", "application/json");
+      res.end("{}");
+    });
+    cleanupTasks.push(close);
+
+    const client = await withClientAndServer(baseUrl, process.cwd());
+    await client.callTool({ name: "get_health", arguments: {} });
+    expect(wsHeader).toBeUndefined();
   });
 
   it("POST JSON inclui X-API-Key no cabeçalho", async () => {

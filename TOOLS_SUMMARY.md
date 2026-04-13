@@ -3,6 +3,8 @@
 Referência rápida das ferramentas expostas pelo **pw2c-lightrag-server-mcp**, alinhadas à API HTTP LightRAG (HKUDS) e ao fluxo do [lightragmcp](https://github.com/lalitsuryan/lightragmcp) (`index.js`).  
 O ficheiro homónimo a montante ([TOOLS_SUMMARY.md no lightragmcp](https://github.com/lalitsuryan/lightragmcp/blob/main/TOOLS_SUMMARY.md)) pode descrever nomes ou parâmetros diferentes dos do código npm desse repo; **aqui vale o que está implementado neste pacote** (ver [`src/server.ts`](src/server.ts)).
 
+**Parâmetro comum (opcional):** todas as tools aceitam `workspace` (string). Quando preenchido, envia o cabeçalho `LIGHTRAG-WORKSPACE` nesse pedido e **sobrescreve** o valor por defeito definido pela variável de ambiente `LIGHTRAG_WORKSPACE` do processo MCP.
+
 ---
 
 ## Gestão de documentos (10 tools)
