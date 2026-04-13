@@ -1,5 +1,11 @@
 # pw2c-lightrag-server-mcp
 
+## 1.1.0
+
+### Minor Changes
+
+- Suporte opcional a **workspace** LightRAG: variável de ambiente `LIGHTRAG_WORKSPACE` e parâmetro `workspace` em todas as tools, enviando o cabeçalho HTTP `LIGHTRAG-WORKSPACE` com precedência tool > env > omissão. Documentação e testes e2e atualizados.
+
 ## 1.0.0
 
 ### Major Changes
