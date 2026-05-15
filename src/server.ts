@@ -1,13 +1,14 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import { loadConfigFromEnv } from "./config.js";
+import { LightragOverrideError, loadConfigFromEnv } from "./config.js";
 import {
   createLightragClient,
   LightragHttpError,
   type LightragClient,
   type LightragClientOptions,
 } from "./lightrag-client.js";
+import type { SessionOverrideStore } from "./lightrag-session.js";
 import { readPackageJsonVersion } from "./version.js";
 
 const queryModeEnum = z.enum(["naive", "local", "global", "hybrid", "mix"]);
@@ -66,8 +67,12 @@ function jsonText(data: unknown): string {
 
 function formatError(err: unknown): { text: string; isError: true } {
   if (err instanceof z.ZodError) {
+    /* v8 ignore next 2 */
     const msg = err.issues.map((i) => i.message).join("; ");
     return { text: `Validation: ${msg}`, isError: true };
+  }
+  if (err instanceof LightragOverrideError) {
+    return { text: `Error: ${err.message}`, isError: true };
   }
   if (err instanceof LightragHttpError) {
     return {
@@ -79,14 +84,21 @@ function formatError(err: unknown): { text: string; isError: true } {
   return { text: `Error: ${msg}`, isError: true };
 }
 
+export interface CreateMcpServerOptions {
+  sessionStore?: SessionOverrideStore;
+}
+
 /**
- * Create MCP server proxying LightRAG HTTP API (stdio transport connected separately).
+ * Create MCP server proxying LightRAG HTTP API (transport connected in cli / transport modules).
  */
 export function createMcpServer(
   deps?: Partial<LightragClientOptions>,
+  options?: CreateMcpServerOptions,
 ): McpServer {
   const opts = resolveClientOptions(deps);
-  const client: LightragClient = createLightragClient(opts);
+  const defaultClient = createLightragClient(opts);
+  const getClient = (): LightragClient =>
+    options?.sessionStore?.getClient() ?? defaultClient;
 
   const server = new McpServer({
     name: "pw2c-lightrag-server-mcp",
@@ -136,7 +148,7 @@ export function createMcpServer(
       }),
     ),
     (p) =>
-      client.postJson("/documents/text", omitWorkspace(p), {
+      getClient().postJson("/documents/text", omitWorkspace(p), {
         workspace: workspaceFromTool(p),
       }),
   );
@@ -158,7 +170,7 @@ export function createMcpServer(
         workspace: data.workspace,
       })),
     (p) =>
-      client.postJson("/documents/texts", omitWorkspace(p), {
+      getClient().postJson("/documents/texts", omitWorkspace(p), {
         workspace: workspaceFromTool(p),
       }),
     {
@@ -173,9 +185,12 @@ export function createMcpServer(
     "Upload a document: local file path (under cwd) or base64-encoded bytes",
     withWorkspace(z.object({ file: z.string() })),
     (p) =>
-      client.postMultipartUpload((omitWorkspace(p) as { file: string }).file, {
-        workspace: workspaceFromTool(p),
-      }),
+      getClient().postMultipartUpload(
+        (omitWorkspace(p) as { file: string }).file,
+        {
+          workspace: workspaceFromTool(p),
+        },
+      ),
   );
 
   registerZod(
@@ -183,7 +198,7 @@ export function createMcpServer(
     "Scan for new documents in the configured directory",
     workspaceOnlySchema,
     (p) =>
-      client.postNoBody("/documents/scan", {
+      getClient().postNoBody("/documents/scan", {
         workspace: workspaceFromTool(p),
       }),
   );
@@ -192,7 +207,8 @@ export function createMcpServer(
     "get_documents",
     "Retrieve all documents from LightRAG",
     workspaceOnlySchema,
-    (p) => client.getJson("/documents", { workspace: workspaceFromTool(p) }),
+    (p) =>
+      getClient().getJson("/documents", { workspace: workspaceFromTool(p) }),
   );
 
   registerZod(
@@ -205,7 +221,7 @@ export function createMcpServer(
       }),
     ),
     (p) =>
-      client.postJson("/documents/paginated", omitWorkspace(p), {
+      getClient().postJson("/documents/paginated", omitWorkspace(p), {
         workspace: workspaceFromTool(p),
       }),
   );
@@ -215,7 +231,7 @@ export function createMcpServer(
     "Delete specific documents by IDs",
     withWorkspace(z.object({ doc_ids: z.array(z.string()) })),
     (p) =>
-      client.deleteJson("/documents/delete_document", omitWorkspace(p), {
+      getClient().deleteJson("/documents/delete_document", omitWorkspace(p), {
         workspace: workspaceFromTool(p),
       }),
   );
@@ -225,7 +241,7 @@ export function createMcpServer(
     "Clear all documents from LightRAG",
     workspaceOnlySchema,
     (p) =>
-      client.deleteJson("/documents", undefined, {
+      getClient().deleteJson("/documents", undefined, {
         workspace: workspaceFromTool(p),
       }),
   );
@@ -235,7 +251,7 @@ export function createMcpServer(
     "Reprocess failed and pending documents",
     workspaceOnlySchema,
     (p) =>
-      client.postJson(
+      getClient().postJson(
         "/documents/reprocess_failed",
         {},
         {
@@ -249,7 +265,7 @@ export function createMcpServer(
     "Cancel the currently running pipeline",
     workspaceOnlySchema,
     (p) =>
-      client.postJson(
+      getClient().postJson(
         "/documents/cancel_pipeline",
         {},
         {
@@ -271,7 +287,7 @@ export function createMcpServer(
       }),
     ),
     (p) =>
-      client.postJson("/query", omitWorkspace(p), {
+      getClient().postJson("/query", omitWorkspace(p), {
         workspace: workspaceFromTool(p),
       }),
   );
@@ -287,7 +303,7 @@ export function createMcpServer(
     ),
     (p) => {
       const b = omitWorkspace(p) as { query: string; mode: string };
-      return client.postQueryStream(
+      return getClient().postQueryStream(
         { query: b.query, mode: b.mode, stream: true },
         { workspace: workspaceFromTool(p) },
       );
@@ -304,7 +320,7 @@ export function createMcpServer(
       }),
     ),
     (p) =>
-      client.postJson("/query/data", omitWorkspace(p), {
+      getClient().postJson("/query/data", omitWorkspace(p), {
         workspace: workspaceFromTool(p),
       }),
   );
@@ -321,7 +337,7 @@ export function createMcpServer(
       }),
     ),
     (p) =>
-      client.getJsonWithParams("/graphs", omitWorkspace(p), {
+      getClient().getJsonWithParams("/graphs", omitWorkspace(p), {
         workspace: workspaceFromTool(p),
       }),
   );
@@ -331,7 +347,7 @@ export function createMcpServer(
     "Get all graph labels",
     workspaceOnlySchema,
     (p) =>
-      client.getJson("/graph/label/list", {
+      getClient().getJson("/graph/label/list", {
         workspace: workspaceFromTool(p),
       }),
   );
@@ -341,7 +357,7 @@ export function createMcpServer(
     "Get popular labels by node degree",
     withWorkspace(z.object({ limit: z.number().default(300) })),
     (p) =>
-      client.getJsonWithParams("/graph/label/popular", omitWorkspace(p), {
+      getClient().getJsonWithParams("/graph/label/popular", omitWorkspace(p), {
         workspace: workspaceFromTool(p),
       }),
   );
@@ -356,7 +372,7 @@ export function createMcpServer(
       }),
     ),
     (p) =>
-      client.getJsonWithParams("/graph/label/search", omitWorkspace(p), {
+      getClient().getJsonWithParams("/graph/label/search", omitWorkspace(p), {
         workspace: workspaceFromTool(p),
       }),
   );
@@ -367,7 +383,7 @@ export function createMcpServer(
     withWorkspace(z.object({ name: z.string() })),
     (p) => {
       const b = omitWorkspace(p) as { name: string };
-      return client.getJsonWithParams(
+      return getClient().getJsonWithParams(
         "/graph/entity/exists",
         { name: b.name },
         { workspace: workspaceFromTool(p) },
@@ -385,7 +401,7 @@ export function createMcpServer(
       }),
     ),
     (p) =>
-      client.postJson("/graph/entity/create", omitWorkspace(p), {
+      getClient().postJson("/graph/entity/create", omitWorkspace(p), {
         workspace: workspaceFromTool(p),
       }),
   );
@@ -402,7 +418,7 @@ export function createMcpServer(
       }),
     ),
     (p) =>
-      client.postJson("/graph/entity/edit", omitWorkspace(p), {
+      getClient().postJson("/graph/entity/edit", omitWorkspace(p), {
         workspace: workspaceFromTool(p),
       }),
   );
@@ -412,7 +428,7 @@ export function createMcpServer(
     "Delete an entity from the knowledge graph",
     withWorkspace(z.object({ entity_name: z.string() })),
     (p) =>
-      client.deleteJson("/documents/delete_entity", omitWorkspace(p), {
+      getClient().deleteJson("/documents/delete_entity", omitWorkspace(p), {
         workspace: workspaceFromTool(p),
       }),
   );
@@ -428,7 +444,7 @@ export function createMcpServer(
       }),
     ),
     (p) =>
-      client.postJson("/graph/relation/create", omitWorkspace(p), {
+      getClient().postJson("/graph/relation/create", omitWorkspace(p), {
         workspace: workspaceFromTool(p),
       }),
   );
@@ -444,7 +460,7 @@ export function createMcpServer(
       }),
     ),
     (p) =>
-      client.postJson("/graph/relation/edit", omitWorkspace(p), {
+      getClient().postJson("/graph/relation/edit", omitWorkspace(p), {
         workspace: workspaceFromTool(p),
       }),
   );
@@ -459,7 +475,7 @@ export function createMcpServer(
       }),
     ),
     (p) =>
-      client.deleteJson("/documents/delete_relation", omitWorkspace(p), {
+      getClient().deleteJson("/documents/delete_relation", omitWorkspace(p), {
         workspace: workspaceFromTool(p),
       }),
   );
@@ -474,7 +490,7 @@ export function createMcpServer(
       }),
     ),
     (p) =>
-      client.postJson("/graph/entities/merge", omitWorkspace(p), {
+      getClient().postJson("/graph/entities/merge", omitWorkspace(p), {
         workspace: workspaceFromTool(p),
       }),
   );
@@ -485,7 +501,7 @@ export function createMcpServer(
     "Get the processing pipeline status",
     workspaceOnlySchema,
     (p) =>
-      client.getJson("/documents/pipeline_status", {
+      getClient().getJson("/documents/pipeline_status", {
         workspace: workspaceFromTool(p),
       }),
   );
@@ -496,7 +512,7 @@ export function createMcpServer(
     withWorkspace(z.object({ track_id: z.string() })),
     (p) => {
       const b = omitWorkspace(p) as { track_id: string };
-      return client.getJson(`/documents/track_status/${b.track_id}`, {
+      return getClient().getJson(`/documents/track_status/${b.track_id}`, {
         workspace: workspaceFromTool(p),
       });
     },
@@ -507,7 +523,7 @@ export function createMcpServer(
     "Get document status counts",
     workspaceOnlySchema,
     (p) =>
-      client.getJson("/documents/status_counts", {
+      getClient().getJson("/documents/status_counts", {
         workspace: workspaceFromTool(p),
       }),
   );
@@ -517,7 +533,7 @@ export function createMcpServer(
     "Clear LightRAG internal cache",
     workspaceOnlySchema,
     (p) =>
-      client.postJson(
+      getClient().postJson(
         "/documents/clear_cache",
         {},
         {
@@ -530,7 +546,7 @@ export function createMcpServer(
     "get_health",
     "Check LightRAG server health status",
     workspaceOnlySchema,
-    (p) => client.getJson("/health", { workspace: workspaceFromTool(p) }),
+    (p) => getClient().getJson("/health", { workspace: workspaceFromTool(p) }),
   );
 
   return server;

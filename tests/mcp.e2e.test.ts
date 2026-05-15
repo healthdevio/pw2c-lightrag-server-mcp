@@ -204,6 +204,38 @@ describe("MCP e2e com HTTP mock", () => {
     expect(names).toContain("get_health");
   });
 
+  it("resolve LightRAG apenas via env quando createMcpServer não recebe baseUrl", async () => {
+    const { baseUrl, close } = await startMockServer((req, res) => {
+      expect(req.url).toBe("/health");
+      res.setHeader("Content-Type", "application/json");
+      res.end("{}");
+    });
+    cleanupTasks.push(close);
+    vi.stubEnv("LIGHTRAG_SERVER_URL", baseUrl);
+
+    const server = createMcpServer({
+      cwd: process.cwd(),
+    }) as unknown as TestMcpServer;
+    const client = new Client({
+      name: "pw2c-lightrag-e2e-env",
+      version: "0.0.1",
+    });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    cleanupTasks.push(async () => {
+      await Promise.all([
+        server.close(),
+        clientTransport.close(),
+        serverTransport.close(),
+      ]);
+    });
+    await Promise.all([
+      server.connect(serverTransport),
+      client.connect(clientTransport),
+    ]);
+    await client.callTool({ name: "get_health", arguments: {} });
+  });
+
   it("get_health faz GET /health", async () => {
     let saw = false;
     const { baseUrl, close } = await startMockServer((req, res, body) => {

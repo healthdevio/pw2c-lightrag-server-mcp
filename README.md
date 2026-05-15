@@ -9,6 +9,7 @@ Servidor [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) em **T
 - Inserção de texto, upload de ficheiros (path sob o diretório de trabalho ou base64), scan, listagens, pipeline e cancelamento
 - Operações de grafo: labels, entidades, relações, merge
 - Autenticação opcional via cabeçalho `X-API-Key`
+- Transporte MCP: **stdio** (predefinição) ou **HTTP Streamable** (`--sse`, endpoint `/mcp`) para clientes remotos (ex.: n8n)
 - Instalação e execução via `npx` após publicação no npm
 
 ## Requisitos
@@ -24,6 +25,12 @@ Quando o pacote estiver publicado:
 npx pw2c-lightrag-server-mcp
 ```
 
+Modo HTTP (Streamable MCP em `/mcp`, útil para n8n e outros clientes na rede):
+
+```bash
+npx pw2c-lightrag-server-mcp --sse
+```
+
 Ou instalação global:
 
 ```bash
@@ -32,14 +39,18 @@ npm install -g pw2c-lightrag-server-mcp
 
 ## Variáveis de ambiente
 
-| Variável              | Obrigatória | Descrição                                                            |
-| --------------------- | ----------- | -------------------------------------------------------------------- |
-| `LIGHTRAG_SERVER_URL` | Não         | URL base do LightRAG (predefinição: `http://localhost:9621`)         |
-| `LIGHTRAG_API_KEY`    | Não         | Se o servidor exigir, enviada como `X-API-Key`                       |
-| `LIGHTRAG_TIMEOUT_MS` | Não         | Timeout HTTP em ms (predefinição: `30000`)                           |
-| `LIGHTRAG_WORKSPACE`  | Não         | Workspace LightRAG por defeito (cabeçalho HTTP `LIGHTRAG-WORKSPACE`) |
+| Variável                     | Obrigatória | Descrição                                                                               |
+| ---------------------------- | ----------- | --------------------------------------------------------------------------------------- |
+| `LIGHTRAG_SERVER_URL`        | Não         | URL base do LightRAG (predefinição: `http://localhost:9621`)                            |
+| `LIGHTRAG_API_KEY`           | Não         | Se o servidor exigir, enviada como `X-API-Key`                                          |
+| `LIGHTRAG_TIMEOUT_MS`        | Não         | Timeout HTTP em ms (predefinição: `30000`)                                              |
+| `LIGHTRAG_WORKSPACE`         | Não         | Workspace LightRAG por defeito (cabeçalho upstream `LIGHTRAG-WORKSPACE`)                |
+| `MCP_HTTP_PORT`              | Não         | Porta do servidor MCP em modo `--sse` (predefinição: `8000`)                            |
+| `MCP_HTTP_HOST`              | Não         | Host de bind em modo `--sse` (predefinição: `0.0.0.0`)                                  |
+| `MCP_HTTP_HEADER_OVERRIDES`  | Não         | Em modo `--sse`: `false` ou `0` desativa overrides por cabeçalho (predefinição: ativo)  |
+| `MCP_ALLOWED_LIGHTRAG_HOSTS` | Não         | Hosts permitidos em overrides de URL (vírgulas); vazio = `*` (qualquer host http/https) |
 
-**Precedência do workspace:** o argumento opcional `workspace` em cada tool (se não vazio) tem prioridade sobre `LIGHTRAG_WORKSPACE`; se nenhum estiver definido, o cabeçalho não é enviado e aplica-se o comportamento por defeito do servidor LightRAG. O suporte a workspaces pode variar entre versões e rotas; ver [discussão no repositório upstream](https://github.com/HKUDS/LightRAG/issues/2904).
+**Precedência do workspace:** o argumento opcional `workspace` em cada tool (se não vazio) tem prioridade sobre `LIGHTRAG_WORKSPACE` e sobre o cabeçalho `LIGHTRAG-WORKSPACE` da sessão HTTP; se nenhum estiver definido, o cabeçalho não é enviado e aplica-se o comportamento por defeito do servidor LightRAG. O suporte a workspaces pode variar entre versões e rotas; ver [discussão no repositório upstream](https://github.com/HKUDS/LightRAG/issues/2904).
 
 **Upload por path:** o ficheiro tem de estar **dentro do diretório de trabalho** do processo do MCP (sem path traversal para fora). Para conteúdo arbitrário, use **base64** no parâmetro `file` da tool `upload_document`.
 
@@ -63,6 +74,70 @@ No ficheiro de MCP do Cursor (por exemplo `.cursor/mcp.json` na raiz do projeto 
 ```
 
 Reinicie o Cursor ou recarregue os servidores MCP após alterar a configuração.
+
+## n8n (MCP Client Tool)
+
+Com o pacote em modo HTTP (`--sse` num container ou VM):
+
+| Campo             | Valor                                                                             |
+| ----------------- | --------------------------------------------------------------------------------- |
+| Server Transport  | HTTP Streamable                                                                   |
+| Endpoint          | `http://<host>:8000/mcp` (mesma rede Docker: `http://<nome-do-serviço>:8000/mcp`) |
+| Options → Timeout | `120000` ou mais (consultas RAG)                                                  |
+
+Exemplos Docker: [docs/docker/](docs/docker/) (`docker-compose` stdio/sse e stack Swarm). Stack Portainer (Compose): [docs/stacks/portainer-compose-stack.yml](docs/stacks/portainer-compose-stack.yml).
+
+### Overrides por cabeçalho HTTP (n8n)
+
+Em modo `--sse`, cada pedido a `/mcp` pode enviar credenciais e destino LightRAG nos **cabeçalhos HTTP** (por sessão MCP). Valores em env no container servem de **fallback** quando o header não é enviado. O modo **stdio** (Cursor local) **não** suporta estes headers — use `env` no `mcp.json`.
+
+| Campo     | Variável de ambiente (default) | Cabeçalho HTTP (override por sessão) | Tool MCP                            |
+| --------- | ------------------------------ | ------------------------------------ | ----------------------------------- |
+| Base URL  | `LIGHTRAG_SERVER_URL`          | `LIGHTRAG-Server-Url`                | —                                   |
+| API key   | `LIGHTRAG_API_KEY`             | `LIGHTRAG-API-Key`                   | —                                   |
+| Workspace | `LIGHTRAG_WORKSPACE`           | `LIGHTRAG-WORKSPACE`                 | arg `workspace` (prioridade máxima) |
+
+Não use `X-API-Key` no pedido ao MCP para apontar ao LightRAG — esse nome reserva-se para auth futura do endpoint `/mcp`. Use `LIGHTRAG-API-Key`.
+
+**n8n MCP Client Tool (v1.2+):** em _Authentication_, escolha **Multiple Headers Auth** (ou vários _Header Auth_) com, por exemplo:
+
+| Header                | Valor (exemplo)                |
+| --------------------- | ------------------------------ |
+| `LIGHTRAG-Server-Url` | `https://lightrag.example.com` |
+| `LIGHTRAG-API-Key`    | `{{ $credentials.apiKey }}`    |
+| `LIGHTRAG-WORKSPACE`  | `meu-workspace` (opcional)     |
+
+Endpoint: `http://<host>:8000/mcp`. A stack pode expor defaults em env e deixar o workflow sobrescrever via headers.
+
+**Allowlist (`MCP_ALLOWED_LIGHTRAG_HOSTS`):** lista separada por vírgulas de hostnames permitidos quando o cliente envia `LIGHTRAG-Server-Url`. O valor `*` permite qualquer host http(s). Se a variável estiver **vazia ou omitida**, trata-se como `*`.
+
+| Exemplo de valor                       | Uso                                              |
+| -------------------------------------- | ------------------------------------------------ |
+| `lightrag.example.com,api.example.com` | Produção: só hosts explícitos na allowlist       |
+| `127.0.0.1,localhost`                  | Desenvolvimento local                            |
+| `*`                                    | Qualquer destino (menos restritivo; útil em dev) |
+
+**Troubleshooting:** rejeições de override aparecem nos logs do container com prefixo `[LIGHTRAG]`, por exemplo:
+
+```text
+[LIGHTRAG] header override rejected: host "evil.com" not in MCP_ALLOWED_LIGHTRAG_HOSTS (allowed: lightrag.example.com)
+```
+
+Outras mensagens típicas: overrides desativados (`MCP_HTTP_HEADER_OVERRIDES=false`), URL inválida, host não http(s). O pedido HTTP falha com **400** antes de processar o JSON-RPC MCP.
+
+## Modo HTTP remoto no Cursor
+
+Se o MCP estiver exposto em HTTP (sem stdio local):
+
+```json
+{
+  "mcpServers": {
+    "pw2c_lightrag_remote": {
+      "url": "http://seu-host:8000/mcp"
+    }
+  }
+}
+```
 
 ---
 
@@ -203,7 +278,8 @@ Para detalhes do contrato HTTP e armadilhas (upload, NDJSON, etc.), veja [docs/s
 | Comando                    | Descrição                                                                       |
 | -------------------------- | ------------------------------------------------------------------------------- |
 | `npm run build`            | Gera `dist/cli.js` (tsup)                                                       |
-| `npm run dev`              | Executa `src/cli.ts` com tsx                                                    |
+| `npm run dev`              | Executa `src/cli.ts` com tsx (stdio)                                            |
+| `npm run dev:http`         | Executa `src/cli.ts --sse` (HTTP Streamable em `/mcp`)                          |
 | `npm test`                 | Testes Vitest                                                                   |
 | `npm run test:coverage`    | Testes com cobertura                                                            |
 | `npm run lint`             | ESLint + Prettier check                                                         |
@@ -215,16 +291,37 @@ Para detalhes do contrato HTTP e armadilhas (upload, NDJSON, etc.), veja [docs/s
 
 ## Versões e release (Changesets)
 
-O fluxo é o mesmo do repositório [l-pw2c](https://github.com/healthdevio/skills-pw2c) ([`@changesets/cli`](https://github.com/changesets/changesets)):
+Este projeto usa [Changesets](https://github.com/changesets/changesets) para versionar e publicar no npm.
 
-1. **`npm run changeset`** — descreve a alteração (major / minor / patch); gera um ficheiro em `.changeset/`.
-2. Após merge na branch principal, **`npm run version-packages`** — incrementa `version` no `package.json`, consome os changesets e atualiza o `CHANGELOG.md`.
-3. **`npm run release`** — publica no registo npm (requer `npm login` e permissões no pacote).
+### Contribuir com alterações
+
+1. **`npm run changeset`** — descreve a alteração (major / minor / patch) e gera um ficheiro em `.changeset/`.
+2. Abra um PR para `main` com o código e o changeset (o `package.json` na PR mantém a versão atual até ao release).
+
+### Publicação automática (CI)
+
+Após **merge na `main`**, o GitHub Actions (`.github/workflows/release.yml`):
+
+1. Executa **`npm run version-packages`** — incrementa `version` no `package.json`, consome os changesets e atualiza o `CHANGELOG.md`.
+2. Faz commit `chore: version packages` na `main`.
+3. Executa **`npm run release`** — publica no [npm](https://www.npmjs.com/package/pw2c-lightrag-server-mcp).
+
+É necessário o secret **`NPM_TOKEN`** nas Actions do repositório (token com permissão de publish no pacote).
+
+### Release manual (maintainers)
+
+Se precisar de publicar localmente:
+
+```bash
+npm run version-packages
+npm run release   # requer npm login e permissão no pacote
+```
 
 A versão exposta no protocolo MCP (`McpServer`) é lida em tempo de execução a partir do `package.json` ([`src/version.ts`](src/version.ts)).
 
 ## Documentação adicional
 
+- Docker Compose e Swarm: [docs/docker/](docs/docker/) — `docker-compose.stdio.yml`, `docker-compose.sse.yml`, `portainer-swarm-stack.yml`, `.env.example`
 - Resumo das ferramentas MCP: [TOOLS_SUMMARY.md](TOOLS_SUMMARY.md)
 - Especificação interna e paridade com a API: [docs/specs/lightrag-mcp-servidor.spec.md](docs/specs/lightrag-mcp-servidor.spec.md)
 - OpenAPI de referência (cópia local): [docs/openapi.json](docs/openapi.json)

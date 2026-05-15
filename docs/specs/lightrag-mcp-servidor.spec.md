@@ -4,9 +4,8 @@ Este documento explica **porque** o pacote/repositório [lightragmcp](https://gi
 
 Documentação do LightRAG
 
-- [Redoc](https://lightrag-dev-mcp.docuscan.com.br/redoc#tag/documents)
-- [Swagger](https://lightrag-dev-mcp.docuscan.com.br/webui/)
-- [JSON openapi](https://lightrag-dev-mcp.docuscan.com.br/openapi.json) ou `./openapi.json`
+- OpenAPI local: [docs/openapi.json](../openapi.json)
+- Código e routers da API: repositório [HKUDS/LightRAG](https://github.com/HKUDS/LightRAG) (`lightrag/api/routers/`)
 
 ---
 
@@ -21,11 +20,16 @@ Documentação do LightRAG
 ## 2. Arquitetura em três camadas
 
 ```text
-┌─────────────────┐     stdio/SSE      ┌──────────────────────┐     HTTP (REST)    ┌─────────────────┐
-│ Cliente MCP     │ ◄────────────────► │ Servidor MCP         │ ◄────────────────► │ LightRAG Server │
-│ (IDE, agente)   │   MCP (JSON-RPC)   │ (Node/Python/…)      │   JSON / multipart │ (FastAPI :9621) │
-└─────────────────┘                    └──────────────────────┘                    └─────────────────┘
+┌─────────────────┐  stdio ou HTTP /mcp  ┌──────────────────────┐     HTTP (REST)    ┌─────────────────┐
+│ Cliente MCP     │ ◄──────────────────► │ pw2c-lightrag-mcp    │ ◄────────────────► │ LightRAG Server │
+│ (IDE, n8n, …)   │   MCP (JSON-RPC)     │ (Node; --sse opcional)│   JSON / multipart │ (FastAPI :9621) │
+└─────────────────┘                      └──────────────────────┘                    └─────────────────┘
 ```
+
+- **stdio** (predefinição): `npx pw2c-lightrag-server-mcp` — Cursor, Claude Desktop, etc.
+- **HTTP Streamable**: `npx pw2c-lightrag-server-mcp --sse` — endpoint `http://<host>:8000/mcp` (n8n MCP Client Tool, clientes remotos).
+
+**Overrides por sessão HTTP (modo `--sse`):** cada pedido a `/mcp` pode enviar `LIGHTRAG-Server-Url`, `LIGHTRAG-API-Key` e `LIGHTRAG-WORKSPACE` nos cabeçalhos HTTP; valores não vazios substituem as variáveis de ambiente **para essa sessão MCP** (fixados em `onsessioninitialized`, atualizáveis em pedidos seguintes com o mesmo `Mcp-Session-Id`). Validação de host via `MCP_ALLOWED_LIGHTRAG_HOSTS` (vazio = `*`); rejeições com HTTP 400 e log `[LIGHTRAG]`. O argumento `workspace` nas tools mantém prioridade máxima. Modo stdio ignora estes headers.
 
 Pontos importantes:
 

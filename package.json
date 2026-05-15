@@ -1,7 +1,7 @@
 {
   "name": "pw2c-lightrag-server-mcp",
   "version": "1.1.0",
-  "description": "Servidor MCP (stdio) para a API HTTP LightRAG — uso com npx e Cursor.",
+  "description": "Servidor MCP (stdio ou HTTP Streamable) para a API HTTP LightRAG — Cursor, n8n, npx.",
   "type": "module",
   "bin": {
     "pw2c-lightrag-server-mcp": "./dist/cli.js"
@@ -21,6 +21,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsx src/cli.ts",
+    "dev:http": "tsx src/cli.ts --sse",
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
     "typecheck": "tsc --noEmit",

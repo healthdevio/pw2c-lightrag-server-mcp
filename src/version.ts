@@ -12,8 +12,11 @@ export function readPackageJsonVersion(): string {
     const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
       version?: string;
     };
-    return typeof pkg.version === "string" ? pkg.version : "0.0.0";
+    return typeof pkg.version === "string"
+      ? pkg.version
+      : /* v8 ignore next */ "0.0.0";
   } catch {
+    /* v8 ignore next */
     return "0.0.0";
   }
 }

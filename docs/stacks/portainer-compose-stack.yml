@@ -1,0 +1,49 @@
+# Portainer stack — MCP pw2c-lightrag-server-mcp → LightRAG (cliente: n8n)
+#
+# Defina LIGHTRAG_SERVER_URL para a sua instância LightRAG (HTTP/S).
+# Pacote: https://www.npmjs.com/package/pw2c-lightrag-server-mcp
+#
+# Deploy (Portainer): Stacks → Add stack → Web editor → colar este ficheiro.
+# Alternativas: docs/docker/docker-compose.sse.yml (Compose) e docs/docker/portainer-swarm-stack.yml (Swarm).
+
+services:
+  pw2c-lightrag-mcp:
+    image: node:22-alpine
+    container_name: pw2c-lightrag-mcp
+    restart: unless-stopped
+    init: true
+    environment:
+      LIGHTRAG_SERVER_URL: ${LIGHTRAG_SERVER_URL:-https://lightrag.example.com}
+      LIGHTRAG_API_KEY: ${LIGHTRAG_API_KEY:-}
+      LIGHTRAG_TIMEOUT_MS: ${LIGHTRAG_TIMEOUT_MS:-120000}
+      MCP_HTTP_PORT: ${MCP_HTTP_PORT:-8000}
+      MCP_HTTP_HOST: 0.0.0.0
+      MCP_HTTP_HEADER_OVERRIDES: ${MCP_HTTP_HEADER_OVERRIDES:-true}
+      MCP_ALLOWED_LIGHTRAG_HOSTS: ${MCP_ALLOWED_LIGHTRAG_HOSTS:-lightrag.example.com}
+    command:
+      - sh
+      - -c
+      - >-
+        npm install -g "pw2c-lightrag-server-mcp@${PW2C_LIGHTRAG_MCP_VERSION:-1.2.0}"
+        && exec pw2c-lightrag-server-mcp --sse
+    ports:
+      - "${MCP_HTTP_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "-q",
+          "--spider",
+          "http://127.0.0.1:8000/health",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    networks:
+      - default
+
+networks:
+  default:
+    name: pw2c_lightrag_mcp
